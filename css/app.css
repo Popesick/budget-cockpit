@@ -254,6 +254,10 @@ dialog.wide { width: min(860px, calc(100vw - 32px)); }
 .login-card:hover { border-color: var(--accent); }
 .login-card .n { font-weight: 600; }
 .login-card .u { color: var(--muted); font-size: 13px; }
+.sim-date { display: flex; gap: 20px; align-items: center; flex-wrap: wrap; margin-bottom: 8px; padding: 16px; }
+.sim-date .field { min-width: 200px; }
+.year-pick { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--muted); }
+.year-pick select { width: auto; padding: 4px 8px; font-size: 14px; font-weight: 600; color: var(--ink); }
 .login h2 { margin: 24px 0 10px; font-size: 13px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; }
 .login .note { margin-top: 28px; font-size: 13px; color: var(--muted); }
 

@@ -9,13 +9,26 @@ Themen gepflegt. **Proof of Concept mit Fakedaten und simuliertem Login** – ke
 |---|---|---|
 | Dashboard (Baseline, Kennzahlen, Budget je Topf, Tabelle) | alles, plus „Ansicht als …“-Vorschau | nur freigegebene Töpfe und Bereiche |
 | Budgettöpfe anlegen, bearbeiten, archivieren | ✓ | – |
-| Baseline festlegen und auf Töpfe verteilen | ✓ | – |
+| Neues Kalenderjahr anlegen (startet leer) | ✓ | – |
+| Baseline je Jahr festlegen und auf Töpfe verteilen | ✓ | – |
 | Topf-Zugriff vergeben (Lesen / Bearbeiten) | ✓ | – |
-| Sichtbarkeit von Dashboard-Bereichen je Person | ✓ | – |
+| Sichtbarkeit je Person: Dashboard-Bereiche und Budgettöpfe | ✓ | – |
+| Kalenderjahr wechseln (auch Vorjahre) | ✓ | ✓ |
 | Themen anlegen, ändern, per CSV importieren | ✓ | mit Recht „Bearbeiten“ |
 | Kommentieren | ✓ | mit Recht „Lesen“ oder „Bearbeiten“ |
 | Bedarf nachträglich anpassen, Ist-Kosten eintragen, Themen löschen | ✓ | – |
 | Protokoll aller Änderungen, JSON-Export | ✓ | – |
+
+### Kalenderjahre
+
+Töpfe, Rechte und Sichtbarkeiten gelten jahresübergreifend; Baseline, Topfbudgets und Themen werden je
+Kalenderjahr geführt. Ein neu angelegtes Jahr enthält noch keine Daten (Baseline optional, keine Topfbudgets,
+keine Themen). Die Jahresauswahl steht oben in der Kopfzeile; voreingestellt ist das aktuelle Jahr.
+
+**Simuliertes Datum (nur POC):** Auf dem Login-Screen lässt sich ein Datum setzen, z. B. 15.01.2027, um die
+Ansicht im Folgejahr zu testen. Es bestimmt das voreingestellte Jahr und die Zeitstempel neuer Einträge und
+wird im Hinweisbalken oben angezeigt. Ist für das aktuelle Jahr noch nichts angelegt, weist das Dashboard
+darauf hin (Admins können das Jahr direkt anlegen).
 
 ### Topf-Ansicht
 
@@ -52,6 +65,7 @@ auf der Login-Seite oder im Protokoll).
 ```
 index.html
 css/app.css
+js/clock.js             Zeitquelle inkl. simuliertem Datum (nur POC)
 js/config.js            Rahmenparameter: Datenbackend (local/api), Auth-Modus (simulated/entra)
 js/auth.js              Login-Simulation  → später MSAL / Entra ID
 js/permissions.js       Rollen- und Rechte-Regeln (zentral, muss im Backend gespiegelt werden)
@@ -75,8 +89,8 @@ Daten liegen unverschlüsselt im Browser. Vorgesehener Pfad:
    lesen aus dem Verzeichnis.
 3. **Backend:** REST-API (z. B. Azure Functions / App Service) mit Azure SQL. Die Methoden aus `js/store.js`
    werden zu Endpunkten; `js/permissions.js` wird serverseitig durchgesetzt. `dataBackend: 'api'`.
-4. **Datenmodell:** Tabellen `users`, `pots`, `pot_access`, `widget_visibility`, `topics`, `topic_log`,
-   `audit`, `settings` (je Kalenderjahr) – entspricht 1:1 den Objekten in `seed.js`.
+4. **Datenmodell:** Tabellen `users`, `pots`, `years`, `pot_budgets` (Topf × Jahr), `pot_access`,
+   `widget_visibility`, `topics` (mit Jahr), `topic_log`, `audit` – entspricht 1:1 den Objekten in `seed.js`.
 5. **Betrieb:** Protokoll unveränderbar speichern, Backups, Berechtigungskonzept und Datenschutz-Freigabe
    mit Informationssicherheit/Datenschutz abstimmen. Optional: Ist-Kosten automatisch aus dem
    Kostenstellen-Reporting (SAP o. ä.) übernehmen.

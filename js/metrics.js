@@ -2,17 +2,19 @@
 //   ausgegeben = Ist-Kosten abgerechneter Themen (vom Admin eingetragen)
 //   verplant   = Bedarf der Themen, die noch nicht abgerechnet sind
 //   frei       = Budget − verplant − ausgegeben (negativ = überplant)
-export function potMetrics(state, pot) {
+// Alle Werte beziehen sich auf ein Kalenderjahr.
+export function potMetrics(state, pot, year) {
+  const allocated = pot.budgets[year] ?? 0;
   let planned = 0;
   let spent = 0;
   let count = 0;
   for (const t of state.topics) {
-    if (t.potId !== pot.id) continue;
+    if (t.potId !== pot.id || t.year !== year) continue;
     count++;
     if (t.ist != null) spent += t.ist; else planned += t.bedarf;
   }
-  const free = pot.allocated - planned - spent;
-  return { ...pot, planned, spent, free, topicCount: count, util: pot.allocated ? (planned + spent) / pot.allocated : planned + spent ? Infinity : 0 };
+  const free = allocated - planned - spent;
+  return { ...pot, allocated, planned, spent, free, topicCount: count, util: allocated ? (planned + spent) / allocated : planned + spent ? Infinity : 0 };
 }
 
 export function sumMetrics(list) {

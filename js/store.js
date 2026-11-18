@@ -4,6 +4,7 @@ import { createRepository } from './data/repository.js';
 import { WIDGETS, TOPIC_FIELDS } from './data/seed.js';
 import { assertAdmin, canEditTopics, canComment, isAdmin } from './permissions.js';
 import { eur } from './format.js';
+import { clock } from './clock.js';
 
 const uid = (prefix) => `${prefix}${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
 
@@ -25,7 +26,7 @@ export class Store {
   }
 
   async commit(actor, action, detail) {
-    this.state.audit.unshift({ id: uid('a'), ts: new Date().toISOString(), userId: actor.id, action, detail });
+    this.state.audit.unshift({ id: uid('a'), ts: clock.iso(), userId: actor.id, action, detail });
     this.state.audit = this.state.audit.slice(0, 500);
     await this.repo.save(this.state);
     this.listeners.forEach((fn) => fn(this.state));
@@ -52,7 +53,7 @@ export class Store {
     while (usedSlots.has(colorSlot)) colorSlot++;
     const pot = {
       id: uid('p'), name, description: data.description.trim(), costCenter: data.costCenter.trim(),
-      ownerId: data.ownerId || null, allocated: 0, colorSlot, archived: false, createdAt: new Date().toISOString(),
+      ownerId: data.ownerId || null, budgets: {}, colorSlot, archived: false, createdAt: clock.iso(),
     };
     this.state.pots.push(pot);
     if (pot.ownerId && this.user(pot.ownerId)?.role === 'user') {
@@ -76,29 +77,46 @@ export class Store {
     assertAdmin(actor);
     const pot = this.pot(id);
     pot.archived = archived;
-    if (archived) pot.allocated = 0;
-    await this.commit(actor, archived ? 'Topf archiviert' : 'Topf reaktiviert', `${pot.name}${archived ? ' (Budget freigegeben)' : ''}`);
+    await this.commit(actor, archived ? 'Topf archiviert' : 'Topf reaktiviert', pot.name);
   }
 
-  // ---------- Budgetverteilung ----------
-  async setAllocation(actor, baseline, allocations) {
+  // ---------- Kalenderjahre & Budgetverteilung ----------
+  yearEntry(year) {
+    return this.state.years.find((y) => y.year === year);
+  }
+
+  // Ein neues Jahr startet leer: Baseline wie angegeben, keine Topfbudgets, keine Themen
+  async createYear(actor, { year, baseline }) {
     assertAdmin(actor);
+    if (!Number.isInteger(year) || year < 2000 || year > 2100) throw new Error('Bitte ein gültiges Jahr angeben');
+    if (this.yearEntry(year)) throw new Error(`Das Jahr ${year} existiert bereits`);
+    if (!(baseline >= 0)) throw new Error('Ungültige Baseline');
+    this.state.years.push({ year, baseline });
+    this.state.years.sort((a, b) => a.year - b.year);
+    await this.commit(actor, 'Jahr angelegt', `${year}: Baseline ${eur(baseline)}`);
+  }
+
+  async setAllocation(actor, year, baseline, allocations) {
+    assertAdmin(actor);
+    const entry = this.yearEntry(year);
+    if (!entry) throw new Error('Unbekanntes Jahr');
     if (!(baseline >= 0)) throw new Error('Ungültige Baseline');
     const sum = Object.values(allocations).reduce((a, b) => a + b, 0);
     if (sum > baseline) throw new Error('Die Verteilung übersteigt die Baseline');
     const changes = [];
-    if (baseline !== this.state.settings.baseline) {
-      changes.push(`Baseline ${this.state.settings.baseline} → ${baseline}`);
-      this.state.settings.baseline = baseline;
+    if (baseline !== entry.baseline) {
+      changes.push(`Baseline ${eur(entry.baseline)} → ${eur(baseline)}`);
+      entry.baseline = baseline;
     }
     for (const [potId, amount] of Object.entries(allocations)) {
       const pot = this.pot(potId);
-      if (pot && pot.allocated !== amount) {
-        changes.push(`${pot.name}: ${pot.allocated} → ${amount}`);
-        pot.allocated = amount;
+      const old = pot?.budgets[year] ?? 0;
+      if (pot && old !== amount) {
+        changes.push(`${pot.name}: ${eur(old)} → ${eur(amount)}`);
+        pot.budgets[year] = amount;
       }
     }
-    if (changes.length) await this.commit(actor, 'Budget verteilt', changes.join('; '));
+    if (changes.length) await this.commit(actor, `Budget ${year} verteilt`, changes.join('; '));
     return changes.length;
   }
 
@@ -109,6 +127,20 @@ export class Store {
     if (level) this.state.access.push({ userId, potId, level });
     const label = { read: 'Lesen', write: 'Buchen' }[level] ?? 'kein Zugriff';
     await this.commit(actor, 'Topf-Zugriff gesetzt', `${this.user(userId).name} · ${this.pot(potId).name}: ${label}`);
+  }
+
+  // Sichtbarkeit mehrerer Töpfe auf einmal: sichtbar = mindestens Lesen, unsichtbar = kein Zugriff
+  async setPotsVisible(actor, userId, potIds, visible) {
+    assertAdmin(actor);
+    const changed = [];
+    for (const potId of potIds) {
+      const has = this.state.access.some((a) => a.userId === userId && a.potId === potId);
+      if (visible && !has) { this.state.access.push({ userId, potId, level: 'read' }); changed.push(potId); }
+      if (!visible && has) { this.state.access = this.state.access.filter((a) => !(a.userId === userId && a.potId === potId)); changed.push(potId); }
+    }
+    if (!changed.length) return 0;
+    await this.commit(actor, 'Topf-Sichtbarkeit geändert', `${this.user(userId).name}: ${changed.map((id) => this.pot(id).name).join(', ')} ${visible ? 'sichtbar' : 'ausgeblendet'}`);
+    return changed.length;
   }
 
   async setWidget(actor, userId, widgetId, visible) {
@@ -146,28 +178,29 @@ export class Store {
     return this.state.topics.find((t) => t.id === id);
   }
 
-  async createTopic(actor, potId, data) {
+  async createTopic(actor, potId, year, data) {
     if (!canEditTopics(this.state, actor, potId)) throw new Error('Keine Berechtigung, in diesem Topf Themen anzulegen');
-    const topic = this.buildTopic(actor, potId, data);
+    const topic = this.buildTopic(actor, potId, year, data);
     this.state.topics.push(topic);
-    await this.commit(actor, 'Thema angelegt', `${this.pot(potId).name}: ${topic.thema} (${eur(topic.bedarf)})`);
+    await this.commit(actor, 'Thema angelegt', `${this.pot(potId).name} ${year}: ${topic.thema} (${eur(topic.bedarf)})`);
     return topic;
   }
 
-  async importTopics(actor, potId, rows) {
+  async importTopics(actor, potId, year, rows) {
     if (!canEditTopics(this.state, actor, potId)) throw new Error('Keine Berechtigung, in diesem Topf Themen anzulegen');
-    const topics = rows.map((r) => this.buildTopic(actor, potId, r, 'Per CSV importiert'));
+    const topics = rows.map((r) => this.buildTopic(actor, potId, year, r, 'Per CSV importiert'));
     this.state.topics.push(...topics);
     const sum = topics.reduce((a, t) => a + t.bedarf, 0);
-    await this.commit(actor, 'CSV-Import', `${this.pot(potId).name}: ${topics.length} Themen, Bedarf ${eur(sum)}`);
+    await this.commit(actor, 'CSV-Import', `${this.pot(potId).name} ${year}: ${topics.length} Themen, Bedarf ${eur(sum)}`);
     return topics.length;
   }
 
-  buildTopic(actor, potId, data, origin) {
+  buildTopic(actor, potId, year, data, origin) {
     const thema = String(data.thema ?? '').trim();
     if (!thema) throw new Error('Thema fehlt');
-    const now = new Date().toISOString();
-    const topic = { id: uid('t'), potId, createdBy: actor.id, createdAt: now, ist: null, log: [] };
+    if (!this.yearEntry(year)) throw new Error('Unbekanntes Jahr');
+    const now = clock.iso();
+    const topic = { id: uid('t'), potId, year, createdBy: actor.id, createdAt: now, ist: null, log: [] };
     for (const f of TOPIC_FIELDS) {
       if (f.importOnly) continue;
       topic[f.key] = f.money ? Math.max(0, Math.round(Number(data[f.key]) || 0)) : String(data[f.key] ?? '').trim();
@@ -197,7 +230,7 @@ export class Store {
       topic[f.key] = next;
     }
     if (!changes.length) return 0;
-    const now = new Date().toISOString();
+    const now = clock.iso();
     changes.forEach((text) => topic.log.push({ ts: now, userId: actor.id, kind: 'update', text }));
     await this.commit(actor, 'Thema geändert', `${topic.thema}: ${changes.join('; ')}`);
     return changes.length;
@@ -208,7 +241,7 @@ export class Store {
     if (!topic || !canComment(this.state, actor, topic.potId)) throw new Error('Keine Berechtigung');
     const clean = text.trim();
     if (!clean) throw new Error('Kommentar ist leer');
-    topic.log.push({ ts: new Date().toISOString(), userId: actor.id, kind: topic.log.length ? 'update' : 'comment', text: clean });
+    topic.log.push({ ts: clock.iso(), userId: actor.id, kind: topic.log.length ? 'update' : 'comment', text: clean });
     await this.commit(actor, 'Kommentar', `${topic.thema}: ${clean}`);
   }
 

@@ -7,10 +7,12 @@ import { potMetrics, sumMetrics } from './metrics.js';
 import { stackBar, budgetBar, budgetBarRows, slotColor, showTip } from './charts.js';
 import { readFileText, topicsFromCsv, toCsv } from './csv.js';
 import { eur, eurC, pct, ts, esc } from './format.js';
+import { clock } from './clock.js';
 
 const store = new Store();
 const app = document.getElementById('app');
 const ui = {
+  year: null, // ausgewähltes Kalenderjahr
   previewUserId: null, // Admin-Vorschau: Dashboard aus Sicht eines Nutzers
   rightsTab: 'pots',
   allocDraft: null,
@@ -51,6 +53,20 @@ const shortDate = (iso) => new Date(iso).toLocaleDateString(CONFIG.locale, { day
 const loginOf = (id) => store.user(id)?.login ?? id;
 const safeUrl = (u) => (/^https?:\/\//i.test(u) ? u : '');
 
+const YEAR_KEY = 'budget-cockpit.year';
+
+function updateBanner() {
+  const sim = clock.simulated();
+  document.querySelector('.poc-banner').textContent = `POC mit Fakedaten · Login simuliert · keine echten Daten eingeben${sim ? ` · Simuliertes Datum: ${clock.now().toLocaleDateString(CONFIG.locale, { day: '2-digit', month: '2-digit', year: 'numeric' })}` : ''}`;
+}
+
+function pickYear(preferred) {
+  const years = store.state.years.map((y) => y.year);
+  const now = clock.now().getFullYear();
+  ui.year = [preferred, ui.year, now].find((y) => years.includes(y)) ?? years[years.length - 1];
+  try { sessionStorage.setItem(YEAR_KEY, String(ui.year)); } catch { /* nur im Speicher */ }
+}
+
 const routes = {
   dashboard: { label: 'Dashboard', nav: true, show: () => true, render: renderDashboard },
   toepfe: { label: 'Budgettöpfe', nav: true, show: () => true, render: renderPots },
@@ -71,6 +87,7 @@ function render() {
   const user = me();
   if (!user) { renderLogin(); return; }
   const state = store.state;
+  if (!store.yearEntry(ui.year)) pickYear();
   let route = currentRoute();
   if (!routes[route.id].show(user, state)) route = { id: 'dashboard' };
   const active = route.id === 'topf' ? 'toepfe' : route.id;
@@ -83,8 +100,11 @@ function render() {
     <header class="topbar">
       <div class="brand">
         <div class="brand-mark" aria-hidden="true"><svg width="16" height="16" viewBox="0 0 16 16"><rect x="1" y="8" width="3" height="7" rx="1" fill="#fff"/><rect x="6.5" y="4" width="3" height="11" rx="1" fill="#fff"/><rect x="12" y="1" width="3" height="14" rx="1" fill="#fff"/></svg></div>
-        <div>${CONFIG.appName}<small>${esc(state.settings.orgName)} · Kalenderjahr ${state.settings.year}</small></div>
+        <div>${CONFIG.appName}<small>${esc(state.settings.orgName)}</small></div>
       </div>
+      <label class="year-pick">Kalenderjahr
+        <select data-action="year">${state.years.map((y) => `<option value="${y.year}" ${y.year === ui.year ? 'selected' : ''}>${y.year}</option>`).join('')}</select>
+      </label>
       <nav class="nav" aria-label="Hauptnavigation">${nav}</nav>
       <div class="userbox">
         <div class="who">${esc(user.name)}<small>${isAdmin(user) ? 'Admin' : 'Nutzer'} · ${esc(user.login)}</small></div>
@@ -107,6 +127,13 @@ function renderLogin() {
       <h1>${CONFIG.appName}</h1>
       <p>Anmeldung simuliert – wählen Sie eine Demo-Person. Im Zielsystem erfolgt die Anmeldung per Single Sign-on (z. B. Microsoft Entra ID), die Rolle kommt aus dem Unternehmensverzeichnis.</p>
     </div>
+    <div class="card sim-date">
+      <label class="field">Simuliertes Datum (nur POC)
+        <input type="date" data-simdate value="${clock.simulated() ?? ''}" min="2000-01-01" max="2100-12-31"></label>
+      <div class="ink-2">Heute für die App: <strong>${clock.now().toLocaleDateString(CONFIG.locale, { day: '2-digit', month: '2-digit', year: 'numeric' })}</strong>${clock.simulated() ? ' (simuliert)' : ''}<br>
+        <small class="muted">Bestimmt das voreingestellte Kalenderjahr und die Zeitstempel neuer Einträge.</small></div>
+      ${clock.simulated() ? '<button class="btn small" data-action="simdate-clear">Auf echtes Datum zurücksetzen</button>' : ''}
+    </div>
     <h2>Admins</h2><div class="login-grid">${users.filter(isAdmin).map(card).join('')}</div>
     <h2>Nutzer</h2><div class="login-grid">${users.filter((u) => !isAdmin(u)).map(card).join('')}</div>
     <p class="note">Alle Personen, Beträge, Themen und Kostenstellen sind frei erfunden. Änderungen werden nur in diesem Browser gespeichert.
@@ -117,13 +144,13 @@ function renderLogin() {
 // ---------- Dashboard ----------
 function renderDashboard(el, user, state) {
   const viewer = (isAdmin(user) && ui.previewUserId && store.user(ui.previewUserId)) || user;
-  const pots = visiblePots(state, viewer).map((p) => potMetrics(state, p));
+  const year = ui.year;
+  const pots = visiblePots(state, viewer).map((p) => potMetrics(state, p, year));
   const can = (w) => canSeeWidget(state, viewer, w);
   const total = sumMetrics(pots);
   const allPots = state.pots.filter((p) => !p.archived);
-  const totalAllocated = allPots.reduce((a, p) => a + p.allocated, 0);
-  const baseline = state.settings.baseline;
-  const year = state.settings.year;
+  const totalAllocated = allPots.reduce((a, p) => a + (p.budgets[year] ?? 0), 0);
+  const baseline = store.yearEntry(year).baseline;
   const overCount = pots.filter((p) => p.free < 0).length;
   const isPreview = viewer !== user;
 
@@ -134,6 +161,16 @@ function renderDashboard(el, user, state) {
       </select></label>` : '';
 
   const blocks = [];
+  const todayYear = clock.now().getFullYear();
+  if (!store.yearEntry(todayYear)) {
+    blocks.push(`<div class="card span-12" style="border-color:var(--warning)">⚠ Für das aktuelle Kalenderjahr ${todayYear} ist noch kein Budget angelegt. Angezeigt wird ${year}.
+      ${isAdmin(user) ? '<button class="btn small primary" data-action="new-year" style="margin-left:8px">Jahr anlegen</button>' : 'Bitte wenden Sie sich an einen Admin.'}</div>`);
+  } else if (year !== todayYear) {
+    blocks.push(`<div class="card span-12">Sie sehen das Kalenderjahr <strong>${year}</strong> (aktuell: ${todayYear}).</div>`);
+  }
+  if (!total.allocated && store.yearEntry(year) && pots.length) {
+    blocks.push(`<div class="card span-12 empty">Für ${year} sind noch keine Budgets auf Töpfe verteilt.${isAdmin(user) ? ' <a href="#/verteilung">Jetzt verteilen →</a>' : ''}</div>`);
+  }
   if (isPreview) {
     blocks.push(`<div class="card span-12" style="border-color:var(--accent)">Vorschau: So sieht <strong>${esc(viewer.name)}</strong> das Dashboard – ${pots.length} von ${allPots.length} Töpfen, ${WIDGETS.filter((w) => can(w.id)).length} von ${WIDGETS.length} Bereichen freigegeben.</div>`);
   }
@@ -144,7 +181,7 @@ function renderDashboard(el, user, state) {
   if (can('baseline')) {
     blocks.push(`<section class="card span-12">
       <div class="card-head"><div><h2>Baseline-Budget ${year}: ${eur(baseline)}</h2><p>Verteilt auf Töpfe ${eur(totalAllocated)} (${pct(totalAllocated / (baseline || 1))}) · nicht verteilt ${eur(baseline - totalAllocated)}</p></div>${isAdmin(viewer) ? '<a href="#/verteilung">Verteilung ändern →</a>' : ''}</div>
-      ${stackBar(allPots.map((p) => ({ name: p.name, value: p.allocated, slot: p.colorSlot })), baseline)}
+      ${stackBar(allPots.map((p) => ({ name: p.name, value: p.budgets[year] ?? 0, slot: p.colorSlot })), baseline)}
     </section>`);
   }
 
@@ -194,11 +231,11 @@ function renderPots(el, user, state) {
   const admin = isAdmin(user);
   const list = admin ? state.pots : visiblePots(state, user);
   const rows = list.map((p) => {
-    const m = potMetrics(state, p);
+    const m = potMetrics(state, p, ui.year);
     const readers = state.access.filter((a) => a.potId === p.id);
     return `<tr style="${p.archived ? 'opacity:.55' : ''}">
       <td><a href="#/topf/${p.id}"><span class="swatch" style="background:${slotColor(p.colorSlot)}"></span><strong>${esc(p.name)}</strong></a>${p.archived ? ' <span class="badge">archiviert</span>' : ''}<div class="muted" style="font-size:12px;margin-left:18px">${esc(p.description)} · KST ${esc(p.costCenter)} · ${esc(store.user(p.ownerId)?.name ?? '–')}</div></td>
-      <td class="num">${eur(p.allocated)}</td>
+      <td class="num">${eur(m.allocated)}</td>
       <td style="min-width:160px">${budgetBar(m, { legend: false, height: 'sm' })}</td>
       <td class="num" style="${m.free < 0 ? 'color:var(--critical-ink)' : ''}">${eur(m.free)}</td>
       <td class="num">${m.topicCount}</td>
@@ -212,7 +249,7 @@ function renderPots(el, user, state) {
   el.innerHTML = `<div class="page-head"><div><h1>Budgettöpfe</h1><p>${admin ? 'Töpfe anlegen, pflegen und archivieren. Budgets werden unter „Verteilung“ zugeteilt.' : 'Ihre freigegebenen Töpfe. Anklicken für Budget und Themen.'}</p></div>
     ${admin ? '<button class="btn primary" data-action="new-pot">+ Neuer Topf</button>' : ''}</div>
     <section class="card">${list.length ? `<div class="table-wrap"><table>
-      <thead><tr><th>Topf</th><th class="num">Budget</th><th>Ausgegeben · Verplant · Frei</th><th class="num">Übrig</th><th class="num">Themen</th>${admin ? '<th>Zugriff</th><th></th>' : '<th>Ihr Recht</th>'}</tr></thead>
+      <thead><tr><th>Topf</th><th class="num">Budget ${ui.year}</th><th>Ausgegeben · Verplant · Frei</th><th class="num">Übrig</th><th class="num">Themen</th>${admin ? '<th>Zugriff</th><th></th>' : '<th>Ihr Recht</th>'}</tr></thead>
       <tbody>${rows}</tbody></table></div>` : '<div class="empty">Keine Töpfe freigegeben.</div>'}</section>`;
 }
 
@@ -265,8 +302,8 @@ function renderPot(el, user, state, potId) {
     el.innerHTML = '<div class="card empty">Dieser Topf existiert nicht oder ist für Sie nicht freigegeben. <a href="#/toepfe">Zur Übersicht</a></div>';
     return;
   }
-  const m = potMetrics(state, pot);
-  const year = state.settings.year;
+  const year = ui.year;
+  const m = potMetrics(state, pot, year);
   const level = accessLevel(state, user, pot.id);
   const editable = canEditTopics(state, user, pot.id);
   const showTopics = canSeeWidget(state, user, 'topics');
@@ -282,13 +319,13 @@ function renderPot(el, user, state, potId) {
   if (showTopics) {
     const q = ui.topicQuery.trim().toLowerCase();
     const topics = state.topics
-      .filter((t) => t.potId === pot.id)
+      .filter((t) => t.potId === pot.id && t.year === year)
       .filter((t) => !q || TOPIC_FIELDS.some((f) => String(t[f.key] ?? '').toLowerCase().includes(q)))
       .sort((a, b) => (a.prio || '9').localeCompare(b.prio || '9') || a.thema.localeCompare(b.thema));
     const rows = topics.map((t) => topicRows(t, user, state, editable)).join('');
     topicsHtml = `<section class="card span-12">
       <div class="card-head">
-        <div><h2>Geplante Themen</h2><p>${topics.length} ${topics.length === 1 ? 'Thema' : 'Themen'} · Bedarf gesamt ${eur(topics.reduce((a, t) => a + t.bedarf, 0))}</p></div>
+        <div><h2>Geplante Themen ${year}</h2><p>${topics.length} ${topics.length === 1 ? 'Thema' : 'Themen'} · Bedarf gesamt ${eur(topics.reduce((a, t) => a + t.bedarf, 0))}</p></div>
         <div class="row">
           <input type="text" data-topic-search placeholder="Themen durchsuchen" value="${esc(ui.topicQuery)}" aria-label="Themen durchsuchen" style="width:200px">
           ${editable ? `<button class="btn primary small" data-action="new-topic" data-id="${pot.id}">+ Neues Thema</button>
@@ -369,7 +406,7 @@ function topicDialog(potId, topic) {
   const dlg = document.createElement('dialog');
   dlg.className = 'wide';
   dlg.innerHTML = `<form method="dialog" class="form">
-    <h2>${topic ? 'Thema bearbeiten' : 'Neues Thema'}</h2>
+    <h2>${topic ? 'Thema bearbeiten' : `Neues Thema für ${ui.year}`}</h2>
     <datalist id="prio-list"><option value="1"><option value="2"><option value="3"></datalist>
     <div class="form-grid" style="grid-template-columns:repeat(auto-fit,minmax(200px,1fr))">
       ${fields.map(input).join('')}
@@ -385,7 +422,7 @@ function topicDialog(potId, topic) {
       const n = await store.updateTopic(user, topic.id, data);
       toast(n ? `Thema gespeichert (${n} Änderung${n === 1 ? '' : 'en'} protokolliert)` : 'Keine Änderungen');
     } else {
-      const t = await store.createTopic(user, potId, data);
+      const t = await store.createTopic(user, potId, ui.year, data);
       ui.openTopics.add(t.id);
       toast('Thema angelegt');
     }
@@ -397,7 +434,7 @@ function importDialog(potId) {
   const dlg = document.createElement('dialog');
   dlg.className = 'wide';
   dlg.innerHTML = `<form method="dialog" class="form">
-    <h2>Themen aus CSV importieren</h2>
+    <h2>Themen aus CSV importieren (${ui.year})</h2>
     <p class="ink-2" style="margin:0">Erwartete Spalten (Überschrift in Zeile 1, Trennzeichen Semikolon, Komma oder Tab):<br>
       <small>${TOPIC_FIELDS.map((f) => esc(f.label)).join(' · ')}</small><br>
       Pflicht ist nur „Thema“. Ein Wert in „Kommentar“ wird als erster Kommentar übernommen.
@@ -431,7 +468,7 @@ function importDialog(potId) {
   drop.addEventListener('dragleave', () => drop.classList.remove('over'));
   drop.addEventListener('drop', (e) => { e.preventDefault(); drop.classList.remove('over'); load(e.dataTransfer.files[0]); });
   openDialog(dlg, async () => {
-    const n = await store.importTopics(me(), potId, parsed.rows);
+    const n = await store.importTopics(me(), potId, ui.year, parsed.rows);
     toast(`${n} Themen importiert`);
   });
 }
@@ -440,24 +477,25 @@ function exportTopics(potId) {
   const pot = store.pot(potId);
   const cols = TOPIC_FIELDS.filter((f) => !f.importOnly);
   const header = [...cols.map((f) => f.label), 'Ist-Kosten (Euro)', 'Kommentar'];
-  const rows = store.state.topics.filter((t) => t.potId === potId).map((t) => [
+  const rows = store.state.topics.filter((t) => t.potId === potId && t.year === ui.year).map((t) => [
     ...cols.map((f) => t[f.key] ?? ''), t.ist ?? '',
     t.log.map((e, i) => `[${e.kind === 'comment' && i === 0 ? '' : 'Update '}${shortDate(e.ts)} durch ${loginOf(e.userId)}]: ${e.text}`).join('\n'),
   ]);
-  download(`themen-${pot.name.replace(/[^\wäöüÄÖÜß-]+/g, '_')}.csv`, toCsv(header, rows), 'text/csv;charset=utf-8');
+  download(`themen-${ui.year}-${pot.name.replace(/[^\wäöüÄÖÜß-]+/g, '_')}.csv`, toCsv(header, rows), 'text/csv;charset=utf-8');
 }
 
 // ---------- Verteilung ----------
 function renderAllocation(el, user, state) {
+  const year = ui.year;
   const pots = state.pots.filter((p) => !p.archived);
-  if (!ui.allocDraft) {
-    ui.allocDraft = { baseline: state.settings.baseline, values: Object.fromEntries(pots.map((p) => [p.id, p.allocated])) };
+  if (!ui.allocDraft || ui.allocDraft.year !== year) {
+    ui.allocDraft = { year, baseline: store.yearEntry(year).baseline, values: Object.fromEntries(pots.map((p) => [p.id, p.budgets[year] ?? 0])) };
   }
   const d = ui.allocDraft;
-  pots.forEach((p) => { if (!(p.id in d.values)) d.values[p.id] = p.allocated; });
+  pots.forEach((p) => { if (!(p.id in d.values)) d.values[p.id] = p.budgets[year] ?? 0; });
 
   const rows = pots.map((p) => {
-    const m = potMetrics(state, p);
+    const m = potMetrics(state, p, year);
     return `<div class="alloc-row">
       <div class="name"><span class="swatch" style="background:${slotColor(p.colorSlot)}"></span><span title="${esc(p.name)}">${esc(p.name)}<br><small class="muted">verplant + ausgegeben: ${eur(m.planned + m.spent)}</small></span></div>
       <input type="range" min="0" max="${Math.max(d.baseline, d.values[p.id])}" step="5000" value="${d.values[p.id]}" data-alloc="${p.id}" aria-label="Budget ${esc(p.name)}">
@@ -466,13 +504,15 @@ function renderAllocation(el, user, state) {
     </div>`;
   }).join('');
 
-  el.innerHTML = `<div class="page-head"><div><h1>Budgetverteilung ${state.settings.year}</h1><p>Baseline festlegen und auf die Töpfe aufteilen. Änderungen werden erst mit „Verteilung speichern“ wirksam und protokolliert.</p></div></div>
+  const years = state.years.map((y) => y.year);
+  el.innerHTML = `<div class="page-head"><div><h1>Budgetverteilung ${year}</h1><p>Baseline festlegen und auf die Töpfe aufteilen. Änderungen werden erst mit „Verteilung speichern“ wirksam und protokolliert.</p></div>
+    <div class="row"><span class="muted">Angelegte Jahre: ${years.join(', ')}</span><button class="btn primary" data-action="new-year">+ Neues Jahr</button></div></div>
   <div class="grid">
     <section class="card span-8">
       <div class="card-head"><h2>Töpfe</h2><div class="row">
         <button class="btn small" data-action="alloc-even">Rest gleichmäßig verteilen</button>
         <button class="btn small" data-action="alloc-revert">Änderungen verwerfen</button></div></div>
-      <label class="field" style="max-width:280px;margin-bottom:8px">Baseline-Budget ${state.settings.year} in €
+      <label class="field" style="max-width:280px;margin-bottom:8px">Baseline-Budget ${year} in €
         <input type="number" min="0" step="10000" value="${d.baseline}" data-baseline></label>
       ${rows}
     </section>
@@ -485,14 +525,40 @@ function renderAllocation(el, user, state) {
   updateAllocSummary(state);
 }
 
+function yearDialog() {
+  const years = store.state.years;
+  const last = years[years.length - 1];
+  const simYear = clock.now().getFullYear();
+  const suggested = years.some((y) => y.year === simYear) ? last.year + 1 : simYear;
+  const dlg = document.createElement('dialog');
+  dlg.innerHTML = `<form method="dialog" class="form">
+    <h2>Neues Kalenderjahr anlegen</h2>
+    <div class="form-grid">
+      <label class="field">Jahr<input type="number" name="year" required min="2000" max="2100" step="1" value="${suggested}"></label>
+      <label class="field">Baseline-Budget in € (optional)<input type="number" name="baseline" min="0" step="1000" placeholder="0"></label>
+    </div>
+    <p class="muted" style="margin:0">Das neue Jahr startet leer: Budgets werden anschließend unter „Verteilung“ zugeteilt, Themen je Topf neu erfasst. Töpfe, Rechte und Sichtbarkeiten gelten jahresübergreifend; Vorjahre bleiben über die Jahresauswahl einsehbar.</p>
+    <p class="error" hidden></p>
+    <div class="actions"><button class="btn" value="cancel" formnovalidate>Abbrechen</button><button class="btn primary" value="ok">Jahr anlegen</button></div>
+  </form>`;
+  openDialog(dlg, async (data) => {
+    const year = Number(data.year);
+    await store.createYear(me(), { year, baseline: Math.round(Number(data.baseline) || 0) });
+    pickYear(year);
+    ui.allocDraft = null;
+    render();
+    toast(`Kalenderjahr ${year} angelegt`);
+  });
+}
+
 function updateAllocSummary(state) {
   const d = ui.allocDraft;
   const pots = state.pots.filter((p) => !p.archived);
   const sum = pots.reduce((a, p) => a + (d.values[p.id] || 0), 0);
   const rest = d.baseline - sum;
-  const changed = d.baseline !== state.settings.baseline || pots.some((p) => p.allocated !== d.values[p.id]);
+  const changed = d.baseline !== store.yearEntry(d.year).baseline || pots.some((p) => (p.budgets[d.year] ?? 0) !== d.values[p.id]);
   const warnings = pots.filter((p) => {
-    const m = potMetrics(state, p);
+    const m = potMetrics(state, p, d.year);
     return d.values[p.id] < m.planned + m.spent;
   });
   document.getElementById('alloc-summary').innerHTML = `
@@ -530,19 +596,30 @@ function renderRights(el, user, state) {
       }).join('')}</tr>`).join('')}</tbody>
     </table></div>`;
   } else {
-    body = `<p class="ink-2" style="margin-top:0">Legt fest, welche Bereiche eine Person sieht. Inhalte beschränken sich immer auf die freigegebenen Töpfe – Ausnahme „Gesamtbudget & Reserve“, das die Aufteilung über alle Töpfe zeigt.</p>
+    body = `<h3 style="margin:0 0 6px">Dashboard-Bereiche</h3><p class="ink-2" style="margin-top:0">Legt fest, welche Bereiche eine Person sieht. Inhalte beschränken sich immer auf die freigegebenen Töpfe – Ausnahme „Gesamtbudget & Reserve“, das die Aufteilung über alle Töpfe zeigt.</p>
     <div class="table-wrap"><table class="matrix">
       <thead><tr><th>Person</th>${WIDGETS.map((w) => `<th class="rot" title="${esc(w.hint)}">${esc(w.label)}</th>`).join('')}<th class="rot">Vorschau</th></tr></thead>
       <tbody>${users.map((u) => `<tr><td>${esc(u.name)}<div class="muted" style="font-size:12px">${esc(u.unit)}</div></td>${WIDGETS.map((w) => (isAdmin(u)
         ? '<td><span class="badge admin">Admin</span></td>'
         : `<td><input type="checkbox" data-widget="${u.id}|${w.id}" ${canSeeWidget(state, u, w.id) ? 'checked' : ''} aria-label="${esc(w.label)} für ${esc(u.name)}"></td>`)).join('')}
         <td>${isAdmin(u) ? '' : `<button class="btn small" data-action="preview-user" data-id="${u.id}">Ansehen</button>`}</td></tr>`).join('')}</tbody>
+    </table></div>
+    <h3 style="margin:28px 0 6px">Sichtbare Budgettöpfe</h3>
+    <p class="ink-2" style="margin-top:0">Haken = Person sieht den Topf (mindestens Lesen). Ob sie im Topf auch bearbeiten darf, steht im Reiter „Topf-Rechte“ (✎ = Bearbeiten).</p>
+    <div class="table-wrap"><table class="matrix">
+      <thead><tr><th>Person</th>${pots.map((p) => `<th class="rot"><span class="swatch" style="background:${slotColor(p.colorSlot)}"></span>${esc(p.name)}</th>`).join('')}<th class="rot">Alle</th></tr></thead>
+      <tbody>${users.map((u) => `<tr><td>${esc(u.name)}<div class="muted" style="font-size:12px">${esc(u.unit)}</div></td>${pots.map((p) => {
+        if (isAdmin(u)) return '<td><span class="badge admin">Admin</span></td>';
+        const lvl = accessLevel(state, u, p.id);
+        return `<td><input type="checkbox" data-potvis="${u.id}|${p.id}" ${lvl ? 'checked' : ''} aria-label="${esc(p.name)} für ${esc(u.name)} sichtbar">${lvl === 'write' ? ' <span title="Bearbeiten">✎</span>' : ''}</td>`;
+      }).join('')}
+        <td style="white-space:nowrap">${isAdmin(u) ? '' : `<button class="btn small" data-action="vis-all" data-id="${u.id}">alle</button> <button class="btn small" data-action="vis-none" data-id="${u.id}">keine</button>`}</td></tr>`).join('')}</tbody>
     </table></div>`;
   }
   el.innerHTML = `<div class="page-head"><div><h1>Berechtigungen</h1><p>Wer darf welche Töpfe sehen bzw. bearbeiten, und wer sieht welche Bereiche?</p></div></div>
     <section class="card">
       <div class="tabs" role="tablist">
-        <button role="tab" aria-selected="${tab === 'pots'}" data-action="rights-tab" data-tab="pots">Topf-Zugriff</button>
+        <button role="tab" aria-selected="${tab === 'pots'}" data-action="rights-tab" data-tab="pots">Topf-Rechte</button>
         <button role="tab" aria-selected="${tab === 'widgets'}" data-action="rights-tab" data-tab="widgets">Sichtbarkeit</button>
       </div>
       ${body}
@@ -613,9 +690,9 @@ function exportPotsCsv() {
   const user = me();
   const viewer = (isAdmin(user) && ui.previewUserId && store.user(ui.previewUserId)) || user;
   const state = store.state;
-  const rows = visiblePots(state, viewer).map((p) => potMetrics(state, p))
+  const rows = visiblePots(state, viewer).map((p) => potMetrics(state, p, ui.year))
     .map((p) => [p.name, p.costCenter, p.allocated, p.planned, p.spent, p.free, p.topicCount]);
-  download(`budgettoepfe-${state.settings.year}.csv`, toCsv(['Topf', 'Kostenstelle', 'Budget', 'Verplant', 'Ausgegeben', 'Übrig', 'Themen'], rows), 'text/csv;charset=utf-8');
+  download(`budgettoepfe-${ui.year}.csv`, toCsv(['Topf', 'Kostenstelle', 'Budget', 'Verplant', 'Ausgegeben', 'Übrig', 'Themen'], rows), 'text/csv;charset=utf-8');
 }
 
 function csvTemplate() {
@@ -630,7 +707,8 @@ document.addEventListener('click', async (ev) => {
   if (!t) return;
   const user = me();
   const a = t.dataset.action;
-  if (a === 'login') { auth.login(t.dataset.id); ui.previewUserId = null; ui.allocDraft = null; location.hash = '#/dashboard'; render(); return; }
+  if (a === 'login') { auth.login(t.dataset.id); ui.previewUserId = null; ui.allocDraft = null; ui.year = null; pickYear(); location.hash = '#/dashboard'; render(); return; }
+  if (a === 'simdate-clear') { clock.setSimulated(null); updateBanner(); render(); return; }
   if (a === 'logout') { auth.logout(); render(); return; }
   if (a === 'theme') {
     const dark = document.documentElement.dataset.theme
@@ -657,7 +735,7 @@ document.addEventListener('click', async (ev) => {
     case 'archive-pot': {
       const pot = store.pot(t.dataset.id);
       const archive = t.dataset.archived === '1';
-      if (archive && !confirm(`„${pot.name}“ archivieren? Das zugeteilte Budget (${eur(pot.allocated)}) wird wieder frei.`)) return;
+      if (archive && !confirm(`„${pot.name}“ archivieren? Der Topf verschwindet aus Dashboard und Verteilung, sein Budget zählt nicht mehr mit. Reaktivieren ist jederzeit möglich.`)) return;
       ui.allocDraft = null;
       await run(() => store.setPotArchived(user, pot.id, archive), archive ? 'Topf archiviert' : 'Topf reaktiviert');
       break;
@@ -680,6 +758,16 @@ document.addEventListener('click', async (ev) => {
     case 'rights-tab': ui.rightsTab = t.dataset.tab; if (currentRoute().id === 'rechte') render(); break;
     case 'preview-user': ui.previewUserId = t.dataset.id; location.hash = '#/dashboard'; break;
     case 'new-user': userDialog(); break;
+    case 'new-year': yearDialog(); break;
+    case 'vis-all':
+    case 'vis-none': {
+      const pots = store.state.pots.filter((p) => !p.archived).map((p) => p.id);
+      const target = store.user(t.dataset.id);
+      if (a === 'vis-none' && store.state.access.some((x) => x.userId === target.id && x.level === 'write')
+        && !confirm(`${target.name} verliert damit auch alle Bearbeitungsrechte. Fortfahren?`)) return;
+      await run(() => store.setPotsVisible(user, target.id, pots, a === 'vis-all'), a === 'vis-all' ? 'Alle Töpfe sichtbar' : 'Alle Töpfe ausgeblendet');
+      break;
+    }
     case 'alloc-even': {
       const d = ui.allocDraft;
       const pots = store.state.pots.filter((p) => !p.archived);
@@ -694,7 +782,7 @@ document.addEventListener('click', async (ev) => {
     case 'alloc-save': {
       const d = ui.allocDraft;
       await run(async () => {
-        const n = await store.setAllocation(user, d.baseline, d.values);
+        const n = await store.setAllocation(user, d.year, d.baseline, d.values);
         ui.allocDraft = null;
         render();
         toast(n ? `Verteilung gespeichert (${n} Änderung${n === 1 ? '' : 'en'})` : 'Keine Änderungen');
@@ -734,9 +822,18 @@ const input = {};
 
 document.addEventListener('change', async (ev) => {
   const t = ev.target;
+  if (t.hasAttribute('data-simdate')) { clock.setSimulated(t.value || null); updateBanner(); render(); return; }
   const user = me();
   if (!user) return;
   if (t.dataset.action === 'preview') { ui.previewUserId = t.value || null; render(); return; }
+  if (t.dataset.action === 'year') { pickYear(Number(t.value)); ui.openTopics.clear(); render(); return; }
+  if (t.dataset.potvis) {
+    const [userId, potId] = t.dataset.potvis.split('|');
+    const lvl = accessLevel(store.state, store.user(userId), potId);
+    if (!t.checked && lvl === 'write' && !confirm('Damit wird auch das Bearbeitungsrecht für diesen Topf entzogen. Fortfahren?')) { t.checked = true; return; }
+    await run(() => store.setPotsVisible(user, userId, [potId], t.checked), t.checked ? 'Topf sichtbar' : 'Topf ausgeblendet');
+    return;
+  }
   if (t.dataset.access) {
     const [userId, potId] = t.dataset.access.split('|');
     await run(() => store.setAccess(user, userId, potId, t.value || null), 'Zugriff gespeichert');
@@ -772,4 +869,6 @@ window.addEventListener('hashchange', () => { tooltipEl.hidden = true; ui.topicQ
 
 store.subscribe(() => render());
 await store.init();
+updateBanner();
+pickYear(Number((() => { try { return sessionStorage.getItem(YEAR_KEY); } catch { return null; } })()));
 render();

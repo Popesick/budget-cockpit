@@ -1,6 +1,6 @@
 // Fakedaten für den POC. Alle Namen, Kostenstellen, Themen und Beträge sind frei erfunden.
 
-export const SCHEMA_VERSION = 2;
+export const SCHEMA_VERSION = 3;
 
 export const WIDGETS = [
   { id: 'baseline', label: 'Gesamtbudget & Reserve', hint: 'Baseline, unverteilter Rest und Aufteilung auf alle Töpfe' },
@@ -45,7 +45,9 @@ export function createSeed() {
     ['p6', 'Weiterbildung', 'Schulungen und Zertifizierungen', '4711-600', 'u5', 90000],
     ['p7', 'Hardware-Arbeitsplätze', 'Notebooks, Monitore, Peripherie', '4711-700', 'u3', 150000],
   ].map(([id, name, description, costCenter, ownerId, allocated], i) => ({
-    id, name, description, costCenter, ownerId, allocated, colorSlot: i, archived: false, createdAt: `${year}-01-02T09:00:00.000Z`,
+    id, name, description, costCenter, ownerId, colorSlot: i, archived: false, createdAt: `${year - 1}-01-02T09:00:00.000Z`,
+    // Budget je Kalenderjahr
+    budgets: { [year - 1]: Math.round((allocated * 0.9) / 1000) * 1000, [year]: allocated },
   }));
 
   // [potId, Thema, Beschreibung, Bedarf, Ist (null = noch nicht abgerechnet), Benefits, Prio, AP CSS, Ersteller, Kommentare]
@@ -79,12 +81,27 @@ export function createSeed() {
   ];
 
   const topics = T.map(([potId, thema, beschreibung, bedarf, ist, benefits, prio, apCss, createdBy, comments], i) => ({
-    id: `t${i + 1}`, potId, thema, beschreibung, bedarf, ist, benefits,
+    id: `t${i + 1}`, potId, year, thema, beschreibung, bedarf, ist, benefits,
     anmerkung: '', details: '', prio, apCss,
     jira: `https://jira.example.org/browse/BUD-${101 + i}`,
     createdBy, createdAt: `${year}-01-${String(10 + (i % 18)).padStart(2, '0')}T08:30:00.000Z`,
     log: comments.map(([d, userId, text], k) => ({ ts: `${d}T10:00:00.000Z`, userId, text, kind: k === 0 && !text.includes('geändert') ? 'comment' : 'update' })),
   }));
+  // Vorjahr: abgeschlossene Themen (alle abgerechnet)
+  pots.forEach((p, i) => {
+    [0.55, 0.4].forEach((share, k) => {
+      const bedarf = Math.round((p.budgets[year - 1] * share) / 1000) * 1000;
+      topics.push({
+        id: `t${year - 1}-${i}-${k}`, potId: p.id, year: year - 1,
+        thema: k === 0 ? `${p.name} – Hauptvorhaben ${year - 1}` : `${p.name} – Laufende Kosten ${year - 1}`,
+        beschreibung: k === 0 ? 'Abgeschlossenes Vorhaben aus dem Vorjahr' : 'Wiederkehrende Kosten',
+        bedarf, ist: Math.round(bedarf * (0.92 + ((i + k) % 3) * 0.04)), benefits: '', anmerkung: '', details: '',
+        prio: String(k + 1), apCss: '', jira: '', createdBy: p.ownerId, createdAt: `${year - 1}-02-01T08:00:00.000Z`,
+        log: [{ ts: `${year - 1}-12-15T10:00:00.000Z`, userId: 'u2', kind: 'update', text: 'Abgerechnet, Ist-Kosten eingetragen' }],
+      });
+    });
+  });
+
   // Beispiel aus der Anforderung: Änderungseintrag mit Alt/Neu
   topics[9].log.push({ ts: `${year}-11-12T14:05:00.000Z`, userId: 'u2', kind: 'update', text: 'Benefits wurde geändert. Alt: Entlastung Service-Center / Neu: Weniger Anrufe im Service-Center' });
 
@@ -108,7 +125,8 @@ export function createSeed() {
 
   return {
     schemaVersion: SCHEMA_VERSION,
-    settings: { year, baseline: 2400000, orgName: 'Bereich IT (Demo)' },
+    settings: { orgName: 'Bereich IT (Demo)' },
+    years: [{ year: year - 1, baseline: 2200000 }, { year, baseline: 2400000 }],
     users,
     pots,
     access,
