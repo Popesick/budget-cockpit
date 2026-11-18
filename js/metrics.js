@@ -1,20 +1,24 @@
 // Kennzahlen eines Topfs:
 //   ausgegeben = Ist-Kosten abgerechneter Themen (vom Admin eingetragen)
-//   verplant   = Bedarf der Themen, die noch nicht abgerechnet sind
+//   verplant   = Bedarf der Themen, die noch nicht abgerechnet sind (ohne Backlog)
+//   backlog    = Bedarf noch nicht eingeplanter Themen – zählt nicht ins Budget
 //   frei       = Budget − verplant − ausgegeben (negativ = überplant)
 // Alle Werte beziehen sich auf ein Kalenderjahr.
 export function potMetrics(state, pot, year) {
   const allocated = pot.budgets[year] ?? 0;
   let planned = 0;
   let spent = 0;
+  let backlog = 0;
+  let backlogCount = 0;
   let count = 0;
   for (const t of state.topics) {
     if (t.potId !== pot.id || t.year !== year) continue;
     count++;
-    if (t.ist != null) spent += t.ist; else planned += t.bedarf;
+    if (t.ist != null) spent += t.ist;
+    else if (t.status === 'backlog') { backlog += t.bedarf; backlogCount++; } else planned += t.bedarf;
   }
   const free = allocated - planned - spent;
-  return { ...pot, allocated, planned, spent, free, topicCount: count, util: allocated ? (planned + spent) / allocated : planned + spent ? Infinity : 0 };
+  return { ...pot, allocated, planned, spent, free, backlog, backlogCount, topicCount: count, util: allocated ? (planned + spent) / allocated : planned + spent ? Infinity : 0 };
 }
 
 export function sumMetrics(list) {

@@ -1,7 +1,7 @@
 import { CONFIG } from './config.js';
 import { Store } from './store.js';
 import { auth } from './auth.js';
-import { WIDGETS, TOPIC_FIELDS } from './data/seed.js';
+import { WIDGETS, TOPIC_FIELDS, STATUSES, statusLabel } from './data/seed.js';
 import { isAdmin, visiblePots, canEditTopics, canComment, canSeeWidget, accessLevel } from './permissions.js';
 import { potMetrics, sumMetrics } from './metrics.js';
 import { stackBar, budgetBar, budgetBarRows, slotColor, showTip } from './charts.js';
@@ -18,6 +18,7 @@ const ui = {
   allocDraft: null,
   openTopics: new Set(),
   topicQuery: '',
+  reportPot: '', // Reporting: Filter auf einen Topf
 };
 
 const LEVEL_LABEL = { read: 'Lesen', write: 'Bearbeiten', admin: 'Admin' };
@@ -52,6 +53,8 @@ function statusOf(m) {
 const shortDate = (iso) => new Date(iso).toLocaleDateString(CONFIG.locale, { day: '2-digit', month: '2-digit', year: '2-digit' });
 const loginOf = (id) => store.user(id)?.login ?? id;
 const safeUrl = (u) => (/^https?:\/\//i.test(u) ? u : '');
+const statusTag = (id) => `<span class="tag-status ${esc(id)}">${esc(statusLabel(id))}</span>`;
+const fieldText = (f, v) => (f.money ? eur(v) : f.options ? statusLabel(v) : v || '–');
 
 const YEAR_KEY = 'budget-cockpit.year';
 
@@ -70,6 +73,7 @@ function pickYear(preferred) {
 const routes = {
   dashboard: { label: 'Dashboard', nav: true, show: () => true, render: renderDashboard },
   toepfe: { label: 'Budgettöpfe', nav: true, show: () => true, render: renderPots },
+  reporting: { label: 'Reporting', nav: true, show: isAdmin, render: renderReporting },
   topf: { label: 'Topf', nav: false, show: () => true, render: renderPot },
   verteilung: { label: 'Verteilung', nav: true, show: isAdmin, render: renderAllocation },
   rechte: { label: 'Berechtigungen', nav: true, show: isAdmin, render: renderRights },
@@ -349,6 +353,7 @@ function renderPot(el, user, state, potId) {
         <div class="kpis" style="margin-bottom:20px">${lines.map(([cls, label, v]) => `<div class="kpi accent-${cls}" style="padding:12px 0 0"><div class="label">${label}</div><div class="value" style="${cls === 'free' && v < 0 ? 'color:var(--critical-ink)' : ''}">${eur(v)}</div><div class="sub">${cls === 'total' ? '' : `${pct(v / (m.allocated || 1))} des Budgets`}</div></div>`).join('')}</div>
         ${budgetBar(m)}
         ${m.free < 0 ? `<p class="error" style="margin-bottom:0">⚠ Die Themen übersteigen das Budget um ${eur(-m.free)}.</p>` : ''}
+        ${m.backlogCount ? `<p class="muted" style="margin-bottom:0">Zusätzlich im Backlog (noch nicht eingeplant, zählt nicht ins Budget): ${m.backlogCount} ${m.backlogCount === 1 ? 'Thema' : 'Themen'} · ${eur(m.backlog)}</p>` : ''}
       </section>
       ${topicsHtml}
     </div>`;
@@ -366,7 +371,7 @@ function topicRows(t, user, state, editable) {
   const jiraKey = jira ? jira.split('/').pop() : '';
   const detail = open ? `<tr class="topic-detail"><td colspan="7">
     <dl class="topic-fields">
-      ${TOPIC_FIELDS.filter((f) => !f.importOnly).map((f) => `<div><dt>${esc(f.label)}</dt><dd>${f.money ? eur(t[f.key]) : f.key === 'jira' && jira ? `<a href="${esc(jira)}" target="_blank" rel="noopener noreferrer">${esc(t.jira)}</a>` : esc(t[f.key] || '–')}</dd></div>`).join('')}
+      ${TOPIC_FIELDS.filter((f) => !f.importOnly).map((f) => `<div><dt>${esc(f.label)}</dt><dd>${f.key === 'jira' && jira ? `<a href="${esc(jira)}" target="_blank" rel="noopener noreferrer">${esc(t.jira)}</a>` : esc(fieldText(f, t[f.key]))}</dd></div>`).join('')}
       <div><dt>Ist-Kosten (von Kostenstelle abgezogen)</dt><dd>${t.ist == null ? '– noch nicht abgerechnet' : eur(t.ist)}</dd></div>
       <div><dt>Angelegt</dt><dd>${esc(shortDate(t.createdAt))} durch ${esc(loginOf(t.createdBy))}</dd></div>
     </dl>
@@ -384,7 +389,7 @@ function topicRows(t, user, state, editable) {
     <td><button class="toggle" data-action="toggle-topic" data-id="${t.id}" aria-expanded="${open}">${esc(t.thema)}</button><div class="muted" style="font-size:12px;margin-left:14px">${esc(t.beschreibung)}</div></td>
     <td>${esc(t.prio || '–')}</td>
     <td class="num">${eur(t.bedarf)}</td>
-    <td>${t.ist == null ? '<span class="tag-planned">verplant</span>' : `<span class="tag-spent">ausgegeben ${eur(t.ist)}</span>`}</td>
+    <td>${statusTag(t.status)}<br>${t.ist != null ? `<span class="tag-spent">ausgegeben ${eur(t.ist)}</span>` : t.status === 'backlog' ? '<small class="muted">nicht im Budget</small>' : '<span class="tag-planned">verplant</span>'}</td>
     <td>${esc(t.apCss || '–')}</td>
     <td style="white-space:nowrap">${jira ? `<a href="${esc(jira)}" target="_blank" rel="noopener noreferrer">${esc(jiraKey)}</a>` : '–'}</td>
     <td class="muted" style="max-width:260px">${last ? `${esc(last.text.length > 70 ? `${last.text.slice(0, 70)}…` : last.text)}<br><small>${esc(shortDate(last.ts))} · ${esc(loginOf(last.userId))}</small>` : '–'}</td>
@@ -397,9 +402,9 @@ function topicDialog(potId, topic) {
   const fields = TOPIC_FIELDS.filter((f) => !(topic && f.importOnly));
   const input = (f) => {
     const v = topic ? topic[f.key] : '';
-    const locked = topic && f.key === 'bedarf' && !admin;
     if (f.long) return `<label class="field" style="grid-column:1/-1">${esc(f.label)}<textarea name="${f.key}" rows="2" maxlength="1000">${esc(v)}</textarea></label>`;
-    if (f.money) return `<label class="field">${esc(f.label)}${locked ? ' – nur Admin' : ''}<input type="number" name="${f.key}" min="0" step="1" value="${esc(v ?? '')}" ${locked ? 'disabled' : ''}></label>`;
+    if (f.money) return `<label class="field">${esc(f.label)}<input type="number" name="${f.key}" min="0" step="1" value="${esc(v ?? '')}"></label>`;
+    if (f.options) return `<label class="field">${esc(f.label)}<select name="${f.key}">${f.options.map((o) => `<option value="${o.id}" ${o.id === (v || 'geplant') ? 'selected' : ''}>${esc(o.label)} – ${esc(o.hint)}</option>`).join('')}</select></label>`;
     if (f.key === 'kommentar') return `<label class="field" style="grid-column:1/-1">Erster Kommentar<input type="text" name="kommentar" maxlength="500"></label>`;
     return `<label class="field" ${f.key === 'thema' || f.key === 'jira' ? 'style="grid-column:1/-1"' : ''}>${esc(f.label)}<input type="${f.key === 'jira' ? 'url' : 'text'}" name="${f.key}" maxlength="${f.key === 'jira' ? 300 : 120}" value="${esc(v)}" ${f.required ? 'required' : ''} ${f.key === 'prio' ? 'list="prio-list"' : ''} ${f.key === 'jira' ? 'placeholder="https://jira…"' : ''}></label>`;
   };
@@ -478,10 +483,97 @@ function exportTopics(potId) {
   const cols = TOPIC_FIELDS.filter((f) => !f.importOnly);
   const header = [...cols.map((f) => f.label), 'Ist-Kosten (Euro)', 'Kommentar'];
   const rows = store.state.topics.filter((t) => t.potId === potId && t.year === ui.year).map((t) => [
-    ...cols.map((f) => t[f.key] ?? ''), t.ist ?? '',
+    ...cols.map((f) => (f.options ? statusLabel(t[f.key]) : t[f.key] ?? '')), t.ist ?? '',
     t.log.map((e, i) => `[${e.kind === 'comment' && i === 0 ? '' : 'Update '}${shortDate(e.ts)} durch ${loginOf(e.userId)}]: ${e.text}`).join('\n'),
   ]);
   download(`themen-${ui.year}-${pot.name.replace(/[^\wäöüÄÖÜß-]+/g, '_')}.csv`, toCsv(header, rows), 'text/csv;charset=utf-8');
+}
+
+// ---------- Reporting (nur Admins) ----------
+function reportData(state) {
+  const pots = state.pots.filter((p) => !p.archived && (!ui.reportPot || p.id === ui.reportPot));
+  const order = new Map(pots.map((p, i) => [p.id, i]));
+  const topics = state.topics
+    .filter((t) => t.year === ui.year && order.has(t.potId))
+    .sort((a, b) => order.get(a.potId) - order.get(b.potId) || (a.prio || '9').localeCompare(b.prio || '9') || a.thema.localeCompare(b.thema));
+  const byStatus = Object.fromEntries(STATUSES.map((s) => [s.id, topics.filter((t) => (t.status ?? 'geplant') === s.id)]));
+  return { pots, topics, byStatus };
+}
+
+function renderReporting(el, user, state) {
+  const year = ui.year;
+  const { pots, topics, byStatus } = reportData(state);
+  const cost = (list) => list.reduce((a, t) => a + (t.ist ?? t.bedarf), 0);
+  const owner = (p) => store.user(p.ownerId)?.name ?? '–';
+
+  const tiles = STATUSES.map((s) => {
+    const list = byStatus[s.id];
+    const missing = list.filter((t) => !t.benefits.trim()).length;
+    return `<a class="card kpi report-tile ${s.id}" href="#rep-${s.id}" data-action="jump" data-target="rep-${s.id}">
+      <div class="label">${statusTag(s.id)}</div>
+      <div class="value">${list.length} ${list.length === 1 ? 'Thema' : 'Themen'}</div>
+      <div class="sub">${s.id === 'backlog' ? 'Bedarf' : s.id === 'umgesetzt' ? 'Kosten (Ist, sonst Bedarf)' : 'Bedarf bzw. Ist'} ${eur(cost(list))} · ${new Set(list.map((t) => t.potId)).size} Töpfe${missing ? ` · ${missing} ohne Benefits` : ''}</div></a>`;
+  }).join('');
+
+  const overview = pots.map((p) => {
+    const cells = STATUSES.map((s) => {
+      const list = byStatus[s.id].filter((t) => t.potId === p.id);
+      return `<td class="num">${list.length ? `${list.length} <small class="muted">· ${eurC(cost(list))}</small>` : '<span class="muted">–</span>'}</td>`;
+    }).join('');
+    return `<tr><td><a href="#/topf/${p.id}"><span class="swatch" style="background:${slotColor(p.colorSlot)}"></span>${esc(p.name)}</a></td><td>${esc(owner(p))}</td>${cells}</tr>`;
+  }).join('');
+
+  const section = (s) => {
+    const list = byStatus[s.id];
+    let rows = '';
+    for (const p of pots) {
+      const group = list.filter((t) => t.potId === p.id);
+      if (!group.length) continue;
+      rows += `<tr class="group"><th colspan="5"><span class="swatch" style="background:${slotColor(p.colorSlot)}"></span>${esc(p.name)} <span class="muted">· Verantwortlich: ${esc(owner(p))} · ${group.length} ${group.length === 1 ? 'Thema' : 'Themen'}</span></th></tr>`;
+      rows += group.map((t) => {
+        const jira = safeUrl(t.jira);
+        return `<tr>
+          <td><button class="link" data-action="open-topic" data-id="${t.id}">${esc(t.thema)}</button>${jira ? ` <a class="muted" style="font-size:12px" href="${esc(jira)}" target="_blank" rel="noopener noreferrer">${esc(jira.split('/').pop())}</a>` : ''}</td>
+          <td class="benefit">${t.benefits.trim() ? esc(t.benefits) : '<span class="muted">– keine Benefits angegeben</span>'}${t.anmerkung ? `<div class="muted" style="font-size:12px">${esc(t.anmerkung)}</div>` : ''}</td>
+          <td>${esc(t.apCss || '–')}</td>
+          <td>${esc(t.prio || '–')}</td>
+          <td class="num">${eur(t.ist ?? t.bedarf)}${t.ist != null ? '<br><small class="muted">Ist</small>' : ''}</td>
+        </tr>`;
+      }).join('');
+    }
+    return `<section class="card span-12 report-section" id="rep-${s.id}">
+      <div class="card-head"><div><h2>${statusTag(s.id)} <span style="margin-left:4px">${list.length} ${list.length === 1 ? 'Thema' : 'Themen'} · ${eur(cost(list))}</span></h2><p>${esc(s.hint)}</p></div></div>
+      ${list.length ? `<div class="table-wrap"><table class="report-table">
+        <thead><tr><th>Thema</th><th>Benefits</th><th>Ansprechpartner (AP CSS)</th><th>Prio</th><th class="num">Betrag</th></tr></thead>
+        <tbody>${rows}</tbody></table></div>` : '<div class="empty">Keine Themen in diesem Status.</div>'}
+    </section>`;
+  };
+
+  el.innerHTML = `<div class="page-head"><div><h1>Benefit-Reporting ${year}</h1>
+      <p>Benefits aller Themen je Budgettopf, geordnet nach Umsetzungsstand, mit Ansprechpartnern. Ein Klick auf das Thema öffnet es im Topf.</p></div>
+    <div class="row filters">
+      <label class="field">Topf<select data-action="report-pot"><option value="">Alle Töpfe</option>${state.pots.filter((p) => !p.archived).map((p) => `<option value="${p.id}" ${p.id === ui.reportPot ? 'selected' : ''}>${esc(p.name)}</option>`).join('')}</select></label>
+      <button class="btn small" data-action="report-csv">CSV exportieren</button>
+      <button class="btn small" data-action="print">Drucken / PDF</button>
+    </div></div>
+  ${topics.length ? `<div class="grid">
+    <div class="span-12 kpis report-tiles">${tiles}</div>
+    <section class="card span-12">
+      <div class="card-head"><div><h2>Überblick je Topf</h2><p>Anzahl Themen · Betrag</p></div></div>
+      <div class="table-wrap"><table><thead><tr><th>Topf</th><th>Verantwortlich</th>${STATUSES.map((s) => `<th class="num">${esc(s.label)}</th>`).join('')}</tr></thead><tbody>${overview}</tbody></table></div>
+    </section>
+    ${STATUSES.map(section).join('')}
+  </div>` : `<div class="card empty">Für ${year} sind ${ui.reportPot ? 'in diesem Topf ' : ''}noch keine Themen erfasst.</div>`}`;
+}
+
+function exportReport() {
+  const { topics } = reportData(store.state);
+  const owner = (id) => store.user(store.pot(id).ownerId)?.name ?? '';
+  const header = ['Status', 'Topf', 'Topf verantwortlich', 'Thema', 'Benefits', 'Anmerkung zu Bedarf und Benefits', 'AP CSS', 'Prio', 'Bedarf (Euro)', 'Ist-Kosten (Euro)', 'Jira-Link'];
+  const rows = STATUSES.flatMap((s) => topics.filter((t) => (t.status ?? 'geplant') === s.id).map((t) => [
+    s.label, store.pot(t.potId).name, owner(t.potId), t.thema, t.benefits, t.anmerkung, t.apCss, t.prio, t.bedarf, t.ist ?? '', t.jira,
+  ]));
+  download(`benefit-reporting-${ui.year}${ui.reportPot ? `-${store.pot(ui.reportPot).name.replace(/[^\wäöüÄÖÜß-]+/g, '_')}` : ''}.csv`, toCsv(header, rows), 'text/csv;charset=utf-8');
 }
 
 // ---------- Verteilung ----------
@@ -585,7 +677,7 @@ function renderRights(el, user, state) {
   const tab = ui.rightsTab;
   let body;
   if (tab === 'pots') {
-    body = `<p class="ink-2" style="margin-top:0"><strong>Lesen</strong>: Topf, Budget und Themen sehen, Kommentare schreiben. <strong>Bearbeiten</strong>: zusätzlich Themen anlegen, ändern und per CSV importieren. Bedarf nachträglich anpassen, Ist-Kosten eintragen und Themen löschen dürfen nur Admins.</p>
+    body = `<p class="ink-2" style="margin-top:0"><strong>Lesen</strong>: Topf, Budget und Themen sehen, Kommentare schreiben. <strong>Bearbeiten</strong>: zusätzlich Themen anlegen, ändern (inkl. Capex-Bedarf und Status) und per CSV importieren. Ist-Kosten eintragen und Themen löschen dürfen nur Admins.</p>
     <div class="table-wrap"><table class="matrix">
       <thead><tr><th>Person</th>${pots.map((p) => `<th class="rot"><span class="swatch" style="background:${slotColor(p.colorSlot)}"></span>${esc(p.name)}</th>`).join('')}</tr></thead>
       <tbody>${users.map((u) => `<tr><td>${esc(u.name)}<div class="muted" style="font-size:12px">${esc(u.unit)}</div></td>${pots.map((p) => {
@@ -697,7 +789,7 @@ function exportPotsCsv() {
 
 function csvTemplate() {
   const header = TOPIC_FIELDS.map((f) => f.label);
-  const example = ['Beispielthema', 'Kurzbeschreibung', '25000', 'Nutzen für Fachbereich', '', '', '2', 'M. Muster', 'Thema ist wichtig für Sales', 'https://jira.example.org/browse/BUD-1'];
+  const example = ['Beispielthema', 'Kurzbeschreibung', '25000', 'Nutzen für Fachbereich', '', '', '2', 'Backlog', 'M. Muster', 'Thema ist wichtig für Sales', 'https://jira.example.org/browse/BUD-1'];
   download('themen-vorlage.csv', toCsv(header, [example]), 'text/csv;charset=utf-8');
 }
 
@@ -759,6 +851,16 @@ document.addEventListener('click', async (ev) => {
     case 'preview-user': ui.previewUserId = t.dataset.id; location.hash = '#/dashboard'; break;
     case 'new-user': userDialog(); break;
     case 'new-year': yearDialog(); break;
+    case 'open-topic': {
+      const topic = store.topic(t.dataset.id);
+      ui.openTopics.add(topic.id);
+      location.hash = `#/topf/${topic.potId}`;
+      setTimeout(() => document.querySelector(`[data-action="toggle-topic"][data-id="${topic.id}"]`)?.scrollIntoView({ block: 'center' }), 50);
+      break;
+    }
+    case 'jump': ev.preventDefault(); document.getElementById(t.dataset.target)?.scrollIntoView({ behavior: 'smooth' }); break;
+    case 'report-csv': exportReport(); break;
+    case 'print': window.print(); break;
     case 'vis-all':
     case 'vis-none': {
       const pots = store.state.pots.filter((p) => !p.archived).map((p) => p.id);
@@ -825,6 +927,7 @@ document.addEventListener('change', async (ev) => {
   if (t.hasAttribute('data-simdate')) { clock.setSimulated(t.value || null); updateBanner(); render(); return; }
   const user = me();
   if (!user) return;
+  if (t.dataset.action === 'report-pot') { ui.reportPot = t.value; render(); return; }
   if (t.dataset.action === 'preview') { ui.previewUserId = t.value || null; render(); return; }
   if (t.dataset.action === 'year') { pickYear(Number(t.value)); ui.openTopics.clear(); render(); return; }
   if (t.dataset.potvis) {

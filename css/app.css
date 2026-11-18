@@ -311,6 +311,26 @@ dialog .actions { display: flex; justify-content: flex-end; gap: 8px; margin-top
   .userbox .who { display: none; }
   .card { padding: 16px; }
 }
+/* ---------- Status & Reporting ---------- */
+.tag-status { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; font-weight: 600; white-space: nowrap; color: var(--ink-2); }
+.tag-status::before { content: ''; width: 8px; height: 8px; border-radius: 50%; background: var(--axis); }
+.tag-status.geplant::before { background: var(--s1); }
+.tag-status.umgesetzt::before { background: var(--s3); }
+.report-tile { text-decoration: none; color: inherit; border-top: 3px solid var(--axis); }
+.report-tile.geplant { border-top-color: var(--s1); }
+.report-tile.umgesetzt { border-top-color: var(--s3); }
+.report-tile:hover { border-color: var(--accent); }
+.report-tiles { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.report-table td { vertical-align: top; }
+.report-table .benefit { min-width: 260px; white-space: pre-wrap; }
+.report-table tr.group th { background: var(--surface-2); text-align: left; font-weight: 600; padding-top: 10px; text-transform: none; letter-spacing: 0; font-size: 13px; color: var(--ink); }
+.report-section { scroll-margin-top: 80px; }
+button.link { background: none; border: none; padding: 0; cursor: pointer; color: var(--accent-ink); font-weight: 600; text-align: left; text-decoration: underline; text-underline-offset: 2px; }
+@media (max-width: 720px) { .report-tiles { grid-template-columns: 1fr; } }
+
 @media print {
-  .topbar, .poc-banner, .btn { display: none !important; }
+  .topbar, .poc-banner, .btn, .filters { display: none !important; }
+  body { background: #fff; }
+  .card { box-shadow: none; break-inside: avoid-page; }
+  .report-table tr { break-inside: avoid; }
 }

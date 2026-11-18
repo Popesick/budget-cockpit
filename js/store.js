@@ -1,7 +1,7 @@
 // Fachlogik (Commands). Jede Änderung prüft die Berechtigung des handelnden Nutzers
 // und schreibt einen Protokolleintrag. Im Zielsystem werden diese Methoden zu API-Aufrufen.
 import { createRepository } from './data/repository.js';
-import { WIDGETS, TOPIC_FIELDS } from './data/seed.js';
+import { WIDGETS, TOPIC_FIELDS, statusId, statusLabel } from './data/seed.js';
 import { assertAdmin, canEditTopics, canComment, isAdmin } from './permissions.js';
 import { eur } from './format.js';
 import { clock } from './clock.js';
@@ -203,7 +203,8 @@ export class Store {
     const topic = { id: uid('t'), potId, year, createdBy: actor.id, createdAt: now, ist: null, log: [] };
     for (const f of TOPIC_FIELDS) {
       if (f.importOnly) continue;
-      topic[f.key] = f.money ? Math.max(0, Math.round(Number(data[f.key]) || 0)) : String(data[f.key] ?? '').trim();
+      if (f.options) topic[f.key] = statusId(data[f.key]);
+      else topic[f.key] = f.money ? Math.max(0, Math.round(Number(data[f.key]) || 0)) : String(data[f.key] ?? '').trim();
     }
     const comment = String(data.kommentar ?? '').trim();
     if (comment) topic.log.push({ ts: now, userId: actor.id, kind: 'comment', text: comment });
@@ -215,16 +216,17 @@ export class Store {
   async updateTopic(actor, id, data) {
     const topic = this.topic(id);
     if (!topic || !canEditTopics(this.state, actor, topic.potId)) throw new Error('Keine Berechtigung');
-    const fmt = (f, v) => (f.money ? (v == null ? '–' : eur(v)) : v || '–');
+    const fmt = (f, v) => (f.money ? (v == null ? '–' : eur(v)) : f.options ? statusLabel(v) : v || '–');
     const fields = [...TOPIC_FIELDS.filter((f) => !f.importOnly), { key: 'ist', label: 'Ist-Kosten', money: true, adminOnly: true }];
     const changes = [];
     for (const f of fields) {
       if (!(f.key in data)) continue;
       let next = data[f.key];
       if (f.money) next = next === '' || next == null ? (f.key === 'ist' ? null : 0) : Math.max(0, Math.round(Number(next) || 0));
+      else if (f.options) next = statusId(next);
       else next = String(next).trim();
       if (next === topic[f.key]) continue;
-      if ((f.adminOnly || f.key === 'bedarf') && !isAdmin(actor)) throw new Error(`${f.label} kann nur ein Admin ändern`);
+      if (f.adminOnly && !isAdmin(actor)) throw new Error(`${f.label} kann nur ein Admin ändern`);
       if (f.key === 'thema' && !next) throw new Error('Thema darf nicht leer sein');
       changes.push(`${f.label} wurde geändert. Alt: ${fmt(f, topic[f.key])} / Neu: ${fmt(f, next)}`);
       topic[f.key] = next;

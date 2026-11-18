@@ -14,9 +14,10 @@ Themen gepflegt. **Proof of Concept mit Fakedaten und simuliertem Login** – ke
 | Topf-Zugriff vergeben (Lesen / Bearbeiten) | ✓ | – |
 | Sichtbarkeit je Person: Dashboard-Bereiche und Budgettöpfe | ✓ | – |
 | Kalenderjahr wechseln (auch Vorjahre) | ✓ | ✓ |
-| Themen anlegen, ändern, per CSV importieren | ✓ | mit Recht „Bearbeiten“ |
+| Themen anlegen, ändern (inkl. Bedarf und Status), per CSV importieren | ✓ | mit Recht „Bearbeiten“ |
 | Kommentieren | ✓ | mit Recht „Lesen“ oder „Bearbeiten“ |
-| Bedarf nachträglich anpassen, Ist-Kosten eintragen, Themen löschen | ✓ | – |
+| Ist-Kosten eintragen, Themen löschen | ✓ | – |
+| Benefit-Reporting (Backlog / Geplant / Umgesetzt mit Ansprechpartnern) | ✓ | – |
 | Protokoll aller Änderungen, JSON-Export | ✓ | – |
 
 ### Kalenderjahre
@@ -39,9 +40,19 @@ darauf hin (Admins können das Jahr direkt anlegen).
 - Kommentarverlauf mit Zeitstempel und Loginname; Feldänderungen werden automatisch mit Alt/Neu eingetragen:
   `[Update 12.11.26 durch m.brandt]: Benefits wurde geändert. Alt: … / Neu: …`
 
-**Rechenlogik:** Ein Thema zählt als *verplant* mit seinem Bedarf, bis ein Admin die Ist-Kosten einträgt
-(nachdem die realen Kosten von der Kostenstelle abgezogen wurden). Danach zählt es als *ausgegeben* mit den
-Ist-Kosten. *Übrig* = Budget − verplant − ausgegeben.
+**Status:** Jedes Thema hat einen Umsetzungsstand – *Backlog* (noch nicht eingeplant), *Geplant* oder
+*Umgesetzt*. Wer im Topf „Bearbeiten“ darf, pflegt Status und Bedarf; Änderungen landen mit Alt/Neu im Verlauf.
+
+**Rechenlogik:** Ein Thema mit Status *Geplant* oder *Umgesetzt* zählt als *verplant* mit seinem Bedarf, bis ein
+Admin die Ist-Kosten einträgt (nachdem die realen Kosten von der Kostenstelle abgezogen wurden). Danach zählt es
+als *ausgegeben* mit den Ist-Kosten. *Backlog*-Themen zählen nicht ins Budget und werden in der Topf-Ansicht
+separat ausgewiesen. *Übrig* = Budget − verplant − ausgegeben.
+
+### Benefit-Reporting (Admins)
+
+Menüpunkt „Reporting“: Benefits aller Themen des gewählten Jahres, gruppiert nach Backlog / Geplant / Umgesetzt
+und darin nach Budgettopf, mit Topf-Verantwortlichen und Ansprechpartner (AP CSS), Prio und Betrag. Dazu ein
+Überblick je Topf, ein Filter auf einzelne Töpfe, CSV-Export und eine Druckansicht (auch als PDF).
 
 ### CSV-Import
 

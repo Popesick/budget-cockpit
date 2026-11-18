@@ -4,7 +4,7 @@
 //           user   – sieht nur freigegebene Töpfe und freigegebene Dashboard-Bereiche
 // Topf-Zugriff: read  – Topf, Werte und Themen ansehen, kommentieren
 //               write – zusätzlich Themen anlegen, bearbeiten und importieren
-// Nur Admins: Budget verteilen, Bedarf nachträglich anpassen, Ist-Kosten eintragen, Themen löschen
+// Nur Admins: Budget verteilen, Ist-Kosten eintragen, Themen löschen
 
 export const isAdmin = (user) => user?.role === 'admin';
 

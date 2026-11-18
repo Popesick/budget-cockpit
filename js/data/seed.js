@@ -1,6 +1,6 @@
 // Fakedaten für den POC. Alle Namen, Kostenstellen, Themen und Beträge sind frei erfunden.
 
-export const SCHEMA_VERSION = 3;
+export const SCHEMA_VERSION = 4;
 
 export const WIDGETS = [
   { id: 'baseline', label: 'Gesamtbudget & Reserve', hint: 'Baseline, unverteilter Rest und Aufteilung auf alle Töpfe' },
@@ -9,6 +9,25 @@ export const WIDGETS = [
   { id: 'potTable', label: 'Topf-Tabelle', hint: 'Detailwerte je Topf' },
   { id: 'topics', label: 'Themen in Töpfen', hint: 'Themenliste inkl. Kommentaren in der Topf-Ansicht' },
 ];
+
+// Umsetzungsstand eines Themas. Backlog zählt nicht ins Budget, Geplant/Umgesetzt zählen als verplant
+// (bzw. ausgegeben, sobald Ist-Kosten eingetragen sind).
+export const STATUSES = [
+  { id: 'backlog', label: 'Backlog', hint: 'Noch nicht eingeplant – zählt nicht ins Budget' },
+  { id: 'geplant', label: 'Geplant', hint: 'Im Budget eingeplant, Umsetzung steht bevor oder läuft' },
+  { id: 'umgesetzt', label: 'Umgesetzt', hint: 'Abgeschlossen' },
+];
+export const DEFAULT_STATUS = 'geplant';
+export const statusLabel = (id) => STATUSES.find((s) => s.id === id)?.label ?? id;
+
+// Freitext (z. B. aus CSV) auf einen Status abbilden; Unbekanntes wird „Geplant“
+export function statusId(value) {
+  const v = String(value ?? '').trim().toLowerCase();
+  if (STATUSES.some((s) => s.id === v)) return v;
+  if (/backlog|idee|offen|neu/.test(v)) return 'backlog';
+  if (/umgesetzt|erledigt|abgeschlossen|fertig|done|live/.test(v)) return 'umgesetzt';
+  return DEFAULT_STATUS;
+}
 
 // Felder eines Themas – Reihenfolge = Spalten in CSV-Import/-Export
 export const TOPIC_FIELDS = [
@@ -19,6 +38,7 @@ export const TOPIC_FIELDS = [
   { key: 'anmerkung', label: 'Anmerkung zu Bedarf und Benefits', long: true },
   { key: 'details', label: 'Weitere Details/Infos', long: true },
   { key: 'prio', label: 'Prio' },
+  { key: 'status', label: 'Status', options: STATUSES },
   { key: 'apCss', label: 'AP CSS' },
   { key: 'kommentar', label: 'Kommentar', importOnly: true },
   { key: 'jira', label: 'Jira-Link' },
@@ -78,11 +98,19 @@ export function createSeed() {
     ['p6', 'Agile Schulung', 'Teamtrainings für 4 Teams', 22000, null, 'Bessere Planbarkeit', '3', 'L. Hoffmann', 'u5', []],
     ['p7', 'Notebook-Rollout', 'Austausch von 80 Altgeräten', 104000, 104000, 'Sicherheitsupdates, Akkulaufzeit', '1', 'S. Yilmaz', 'u3', []],
     ['p7', 'Monitore & Docking', 'Ergonomie-Ausstattung neue Flächen', 58000, null, 'Arbeitsschutz', '2', 'S. Yilmaz', 'u3', []],
+    ['p4', 'Passwortlose Anmeldung', 'FIDO2-Schlüssel für Admin-Konten', 60000, null, 'Phishing-resistente Anmeldung, weniger Passwort-Resets', '2', 'N. Petrović', 'u7', []],
+    ['p5', 'KI-gestützte Feedback-Analyse', 'Auswertung von Freitext-Kundenfeedback', 70000, null, 'Schnellere Reaktion auf Beschwerden', '3', 'C. Neumann', 'u4',
+      [['2026-10-05', 'u4', 'Idee aus dem Sales-Workshop']]],
   ];
+  const SEED_STATUS = {
+    umgesetzt: ['Erneuerung Core-Switches', 'Monitoring-Plattform', 'Office-Subskription', 'Datenbank-Wartung', 'Penetrationstest Portal', 'CRM-Erweiterung Sales', 'Notebook-Rollout'],
+    backlog: ['Netzwerk-Segmentierung', 'Ticketsystem Upgrade', 'Data-Platform Pilot', 'Agile Schulung', 'Passwortlose Anmeldung', 'KI-gestützte Feedback-Analyse'],
+  };
 
   const topics = T.map(([potId, thema, beschreibung, bedarf, ist, benefits, prio, apCss, createdBy, comments], i) => ({
     id: `t${i + 1}`, potId, year, thema, beschreibung, bedarf, ist, benefits,
     anmerkung: '', details: '', prio, apCss,
+    status: Object.keys(SEED_STATUS).find((k) => SEED_STATUS[k].includes(thema)) ?? 'geplant',
     jira: `https://jira.example.org/browse/BUD-${101 + i}`,
     createdBy, createdAt: `${year}-01-${String(10 + (i % 18)).padStart(2, '0')}T08:30:00.000Z`,
     log: comments.map(([d, userId, text], k) => ({ ts: `${d}T10:00:00.000Z`, userId, text, kind: k === 0 && !text.includes('geändert') ? 'comment' : 'update' })),
@@ -96,7 +124,7 @@ export function createSeed() {
         thema: k === 0 ? `${p.name} – Hauptvorhaben ${year - 1}` : `${p.name} – Laufende Kosten ${year - 1}`,
         beschreibung: k === 0 ? 'Abgeschlossenes Vorhaben aus dem Vorjahr' : 'Wiederkehrende Kosten',
         bedarf, ist: Math.round(bedarf * (0.92 + ((i + k) % 3) * 0.04)), benefits: '', anmerkung: '', details: '',
-        prio: String(k + 1), apCss: '', jira: '', createdBy: p.ownerId, createdAt: `${year - 1}-02-01T08:00:00.000Z`,
+        prio: String(k + 1), status: 'umgesetzt', apCss: '', jira: '', createdBy: p.ownerId, createdAt: `${year - 1}-02-01T08:00:00.000Z`,
         log: [{ ts: `${year - 1}-12-15T10:00:00.000Z`, userId: 'u2', kind: 'update', text: 'Abgerechnet, Ist-Kosten eingetragen' }],
       });
     });

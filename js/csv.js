@@ -1,6 +1,6 @@
 // CSV-Import/-Export für Themen. Akzeptiert Semikolon-, Komma- und Tab-getrennte Dateien
 // (Excel-Export mit UTF-8 oder Windows-1252) und erkennt die Spalten über die Überschriften.
-import { TOPIC_FIELDS } from './data/seed.js';
+import { TOPIC_FIELDS, statusId } from './data/seed.js';
 
 export async function readFileText(file) {
   const buf = await file.arrayBuffer();
@@ -44,6 +44,7 @@ const MATCHERS = [
   ['details', (h) => h.startsWith('weiteredetails') || h.startsWith('details')],
   ['apCss', (h) => h.startsWith('apcss') || h === 'ap'],
   ['prio', (h) => h.startsWith('prio')],
+  ['status', (h) => h.startsWith('status') || h === 'stand' || h.startsWith('umsetzung')],
   ['benefits', (h) => h.startsWith('benefit')],
   ['beschreibung', (h) => h.startsWith('beschreibung')],
   ['kommentar', (h) => h.startsWith('kommentar')],
@@ -83,7 +84,7 @@ export function topicsFromCsv(text) {
     for (const f of TOPIC_FIELDS) {
       if (!(f.key in columns)) continue;
       const v = (r[columns[f.key]] ?? '').trim();
-      rec[f.key] = f.money ? parseMoney(v) : v;
+      rec[f.key] = f.money ? parseMoney(v) : f.options ? statusId(v) : v;
     }
     if (!rec.thema) { warnings.push(`Zeile ${i + 2}: kein Thema – übersprungen`); return; }
     if (Number.isNaN(rec.bedarf)) { warnings.push(`Zeile ${i + 2}: Bedarf nicht lesbar – als 0 übernommen`); rec.bedarf = 0; }
